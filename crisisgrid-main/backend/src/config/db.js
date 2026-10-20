@@ -2,11 +2,19 @@ const { Pool } = require('pg');
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
-pool.query('SELECT NOW()')
-    .then(() => console.log('[db] Postgres connected to Neon'))
-    .catch(err => console.error('[db] Postgres error:', err.message));
+const connectDB = async() => {
+    try {
+        await pool.query('SELECT 1');
+        console.log('[db] Postgres connected');
+    } catch (e) {
+        console.log('[db] Postgres connect error:', e.message);
+    }
+};
 
-module.exports = pool;
+connectDB.query = (...args) => pool.query(...args);
+connectDB.pool = pool;
+
+module.exports = connectDB;
