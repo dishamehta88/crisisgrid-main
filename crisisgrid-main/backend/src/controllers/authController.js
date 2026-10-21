@@ -1,24 +1,15 @@
-// -----------------------------------------------------------------------------
-// authController.js — registration, login, silent token refresh, and logout.
-//
-// Access token  -> returned in the JSON body, kept in React state/memory only.
-// Refresh token -> set as an httpOnly, sameSite cookie so it can't be read
-//                  by client-side JS (mitigates XSS token theft) and is
-//                  automatically re-sent by the browser on /refresh calls.
-// -----------------------------------------------------------------------------
-
 const asyncHandler = require('express-async-handler');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const UserModel = require('../models/User');
 const { generateAccessToken, generateRefreshToken } = require('../utils/generateTokens');
 
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production', // requires HTTPS in prod
+  secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax',
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  path: '/api/auth', // only sent back to auth routes, reduces exposure
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: '/api/auth',
 };
 
 // @route POST /api/auth/register
@@ -30,7 +21,7 @@ const register = asyncHandler(async (req, res) => {
     throw new Error('Name, email and password are required');
   }
 
-  const existing = await User.findOne({ email });
+  const existing = await UserModel.findByEmail(email);
   if (existing) {
     res.status(409);
     throw new Error('An account with this email already exists');
@@ -42,16 +33,16 @@ const register = asyncHandler(async (req, res) => {
       ? {
           dataUrl: verificationDocument.dataUrl,
           fileName: verificationDocument.fileName || '',
-          status: 'pending', // awaiting EOC/admin review
+          status: 'pending',
           uploadedAt: new Date(),
         }
-      : undefined;
+      : null;
 
-  const user = await User.create({
+  const user = await UserModel.createUser({
     name,
     email,
     password,
-    role: role || 'citizen',
+    role,
     organizationName,
     phone,
     verificationDocument: docPayload,
@@ -59,35 +50,39 @@ const register = asyncHandler(async (req, res) => {
 
   const accessToken = generateAccessToken(user);
   const refreshToken = generateRefreshToken(user);
-  user.refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-  await user.save();
+  const hashed = await bcrypt.hash(refreshToken, 10);
+  await UserModel.updateRefreshToken(user.id, hashed);
 
   res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTIONS);
-  res.status(201).json({ success: true, user, accessToken });
+  res.status(201).json({ success: true, user: UserModel.toSafeUser(user), accessToken });
 });
 
 // @route POST /api/auth/login
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  const user = await User.findOne({ email }).select('+password +refreshTokenHash');
-  if (!user || !(await user.comparePassword(password))) {
+  const user = await UserModel.findByEmail(email);
+  if (!user) {
+    res.status(401);
+    throw new Error('Invalid email or password');
+  }
+
+  const ok = await bcrypt.compare(password, user.password_hash);
+  if (!ok) {
     res.status(401);
     throw new Error('Invalid email or password');
   }
 
   const accessToken = generateAccessToken(user);
   const refreshToken = generateRefreshToken(user);
-  user.refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-  await user.save();
+  const hashed = await bcrypt.hash(refreshToken, 10);
+  await UserModel.updateRefreshToken(user.id, hashed);
 
   res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTIONS);
-  res.json({ success: true, user, accessToken });
+  res.json({ success: true, user: UserModel.toSafeUser(user), accessToken });
 });
 
 // @route POST /api/auth/refresh
-// Called silently by the frontend's axios interceptor when a request gets a
-// 401, so the user doesn't get logged out just because 15 minutes passed.
 const refresh = asyncHandler(async (req, res) => {
   const token = req.cookies?.refreshToken;
   if (!token) {
@@ -103,13 +98,13 @@ const refresh = asyncHandler(async (req, res) => {
     throw new Error('Refresh token invalid or expired — please log in again');
   }
 
-  const user = await User.findById(decoded.id).select('+refreshTokenHash');
-  if (!user || !user.refreshTokenHash) {
+  const user = await UserModel.findById(decoded.id);
+  if (!user || !user.refresh_token_hash) {
     res.status(401);
     throw new Error('Session no longer valid — please log in again');
   }
 
-  const matches = await bcrypt.compare(token, user.refreshTokenHash);
+  const matches = await bcrypt.compare(token, user.refresh_token_hash);
   if (!matches) {
     res.status(401);
     throw new Error('Refresh token does not match — please log in again');
@@ -125,10 +120,8 @@ const logout = asyncHandler(async (req, res) => {
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
-      await User.findByIdAndUpdate(decoded.id, { refreshTokenHash: undefined });
-    } catch {
-      // token already invalid — nothing to clean up server-side
-    }
+      await UserModel.clearRefreshToken(decoded.id);
+    } catch {}
   }
   res.clearCookie('refreshToken', { path: '/api/auth' });
   res.json({ success: true, message: 'Logged out' });
@@ -136,7 +129,8 @@ const logout = asyncHandler(async (req, res) => {
 
 // @route GET /api/auth/me
 const getMe = asyncHandler(async (req, res) => {
-  res.json({ success: true, user: req.user });
+  const user = await UserModel.findById(req.user.id || req.user._id);
+  res.json({ success: true, user: UserModel.toSafeUser(user) });
 });
 
 module.exports = { register, login, refresh, logout, getMe };
