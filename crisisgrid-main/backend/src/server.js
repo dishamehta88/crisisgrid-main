@@ -28,26 +28,29 @@ const app = express();
 app.set('trust proxy', 1);
 
 // --- Core middleware ---------------------------------------------------
-app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:3000'],
+    credentials: true
+}))
 app.use(express.json({ limit: '5mb' })); // 5mb allows base64 image payloads for demo uploads
 app.use(cookieParser());
 if (process.env.NODE_ENV !== 'test') {
-  app.use(morgan('dev'));
+    app.use(morgan('dev'));
 }
 
 // Basic protection against brute-force login attempts / API abuse on a
 // free-tier deployment (Render/Railway) with no other WAF in front of it.
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
+    windowMs: 15 * 60 * 1000,
+    limit: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 app.use('/api', apiLimiter);
 
 // --- Health check (used by Render/Railway to know the service is alive) --
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, message: 'CrisisGrid API is running', demoMode: process.env.DEMO_MODE === 'true' });
+    res.json({ success: true, message: 'CrisisGrid API is running', demoMode: process.env.DEMO_MODE === 'true' });
 });
 
 // --- Feature routes ------------------------------------------------------
@@ -68,7 +71,7 @@ initSocket(httpServer);
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
-  console.log(`[server] CrisisGrid API listening on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
+    console.log(`[server] CrisisGrid API listening on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
 });
 
 module.exports = { app, httpServer };
