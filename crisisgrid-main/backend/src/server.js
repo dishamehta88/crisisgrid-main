@@ -25,6 +25,7 @@ const alertRoutes = require('./routes/alertRoutes');
 connectDB();
 
 const app = express();
+app.set('trust proxy', 1);
 
 // --- Core middleware ---------------------------------------------------
 app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
